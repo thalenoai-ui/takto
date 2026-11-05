@@ -275,5 +275,15 @@ button.ev-row { width: 100%; text-align: left; }
 .quick-input { border: 0; outline: none; background: none; width: 100%; font-size: 17px; padding: 0; }
 .tl-card .circle { flex-shrink: 0; }
 .tl-card .grow { cursor: pointer; }
+/* Am Computer: App mittig in angenehmer Breite */
+@media (min-width: 820px) {
+  #view > * { max-width: 760px; margin-left: auto; margin-right: auto; }
+  #view > .sticky-head > * { max-width: 760px; margin-left: auto; margin-right: auto; }
+  #view > .sticky-head { max-width: none; }
+  #tabbar { padding-left: calc(50% - 380px); padding-right: calc(50% - 380px); }
+  .tab { flex-direction: row; justify-content: center; gap: 8px; font-size: 14px; }
+  .tab svg { width: 22px; height: 22px; }
+  .mday { min-height: 78px; }
+}
 .help { font-size: 14px; color: var(--text2); padding: 0 16px; line-height: 1.45; }
 .help ol { padding-left: 20px; margin: 6px 0; }

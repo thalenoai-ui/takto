@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <title>Tagwerk</title>
-<meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f4f3fb" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f1117" media="(prefers-color-scheme: dark)">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -31,10 +31,16 @@
       <svg viewBox="0 0 24 24"><path d="M12 2.8l1.9 4.6 4.6 1.9-4.6 1.9L12 15.8l-1.9-4.6-4.6-1.9 4.6-1.9z"/><path d="M18.5 15l.9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9z"/></svg>
       <span>Tagesplan</span>
     </button>
+    <button id="ai-btn" class="ai-btn" data-act="aiOpen" aria-label="Assistent öffnen"><span class="ai-orb"><svg viewBox="0 0 24 24"><path d="M12 3.5l1.8 4.4 4.4 1.8-4.4 1.8L12 15.9l-1.8-4.4-4.4-1.8 4.4-1.8z"/><path d="M18.3 14.6l.8 1.9 1.9.8-1.9.8-.8 1.9-.8-1.9-1.9-.8 1.9-.8z"/></svg></span></button>
   </nav>
 </div>
 <div id="sheet-root"></div>
 <div id="toast"></div>
+<script src="core.js"></script>
+<script src="planner.js"></script>
+<script src="views.js"></script>
+<script src="sheets.js"></script>
+<script src="assistant.js"></script>
 <script src="app.js"></script>
 <script type="module" src="ai.js"></script>
 </body>

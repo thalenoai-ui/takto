@@ -1,99 +1,115 @@
-// KI-Planer: spricht mit Claude über das offizielle Anthropic-SDK.
-// Die KI entscheidet WAS gemacht wird (Aktionen, Reihenfolge, Dauer),
-// die App rechnet danach die genauen Uhrzeiten aus – so bleiben Fixtermine sicher fix.
+// =====================================================================
+// Tagwerk · ai.js – Gespräch mit Claude über das offizielle Anthropic-SDK.
+// Die KI entscheidet, WAS passieren soll (Aktionen), die App setzt es um
+// und rechnet Uhrzeiten aus. Der Verlauf wird nur hinten ergänzt und
+// unverändert zurückgeschickt (nötig für Claudes "preserved thinking").
+// =====================================================================
 
 const SDK_URL = 'https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@1.0.0/+esm';
 let sdk = null;
 
-const SYSTEM = `Du bist der Planungsassistent in der App "Tagwerk". Die Person, die dir schreibt, geht zur Schule und will ihren Tag sinnvoll planen.
-Du bekommst den Tag als JSON: Fixtermine (Schule, Training, Bandprobe, Kalendertermine), flexible Einträge aus dem Chat, offene Aufgaben aus den Erinnerungen und den aktuellen Plan.
+// Bewusst fester System-Prompt (ohne Datum o. ä.) – der aktuelle Zustand
+// kommt mit jeder Nachricht im <app_zustand>-Block.
+const SYSTEM = `Du bist der persönliche Assistent in der App "Tagwerk" (Kalender, Erinnerungen, Tagesplan) für eine Person, die zur Schule geht. Du sprichst Deutsch, in Du-Form, locker und freundlich – wie ein hilfsbereiter Freund, nicht wie ein Lehrer. Deine Antworten werden oft vorgelesen: kurz (meist 1–2 Sätze), ohne Markdown, ohne Listen, höchstens ein Emoji.
 
-So funktioniert die App, das musst du wissen:
-- Fixtermine werden NIE verschoben.
-- Flexible Einträge ("add_extra") legt die App der Reihe nach hintereinander in freie Zeit (eine Kette). Mit "after" hängst du einen Eintrag an einen Fixtermin (z. B. after="Schule"), mit "at" (HH:MM) gibst du eine feste Startzeit vor.
-- Aufgaben verteilt die App in der Reihenfolge von "task_order" auf die freien Lücken nach der Schule bzw. ab jetzt. "durations" setzt realistische Minuten pro Aufgabe.
-- Du rechnest also keine Uhrzeiten für Aufgaben aus, sondern bestimmst Reihenfolge und Dauer.
+Mit jeder Nachricht bekommst du in <app_zustand> den aktuellen Stand als JSON: jetzt (Datum/Uhrzeit), die nächsten 8 Tage mit Schule, Plan (inkl. IDs) und freien Zeiten ("frei"), offene Aufgaben mit IDs, spätere Termine, Routinen, Fächer und welcher Reiter gerade offen ist.
 
-Aktionen (actions):
-- add_extra: etwas Flexibles einplanen (Heimfahrt, Essen, Pause, Duschen …). title, minutes, optional at oder after.
-- remove_extra: einen flexiblen Eintrag entfernen (title = Teil des Namens).
-- clear_extras: alle flexiblen Einträge des Tages entfernen.
-- add_fixed: neuer Fixtermin im Kalender (title, at=Start HH:MM, end=Ende HH:MM, optional date YYYY-MM-DD).
-- add_reminder: neue Aufgabe in den Erinnerungen (title, optional minutes, date).
-- set_duration: Dauer einer Aufgabe oder eines flexiblen Eintrags ändern (title = Aufgaben-ID oder Name, minutes).
-- replan: ab jetzt neu planen.
-Nicht benötigte Felder setzt du auf null.
+So funktioniert die App:
+- Fixtermine (Schule, Training, Bandprobe, Kalendertermine) werden nie verschoben.
+- Flexible Einträge (Heimfahrt, Essen, Pause …) reiht die App hintereinander in freie Zeit; "after" hängt sie an einen Fixtermin (z. B. "Schule"), "time" setzt eine feste Startzeit.
+- Aufgaben ohne festen Zeitpunkt verteilt die App selbst auf die Lücken nach der Schule. Mit "date"+"time" bei einer Aufgabe wird sie fest eingeplant (📌).
+- Die App zeigt dem Menschen jede Änderung live an der richtigen Stelle.
 
-Beim Planen ("modus": "plan") oder wenn um eine Planung gebeten wird:
-- Wähle in task_order die Aufgaben-IDs, die heute sinnvoll sind: Überfälliges und bald Fälliges zuerst (Tests/Schularbeiten früh genug lernen), hohe Priorität und Markierte bevorzugen, Schweres eher früher am Nachmittag, nicht alles auf einmal – lieber realistisch.
-- Wenn nach der Schule noch keine Heimfahrt oder kein Essen im Plan steht, darfst du das NICHT einfach erfinden; schlage es höchstens im reply vor.
-- Gib realistische durations an (Hausübung meist 20–40 min, Lernen für Tests 45–60 min).
-Im normalen Chat: setze die Wünsche genau als Aktionen um. task_order nur ändern, wenn die Nachricht das betrifft, sonst leeres Array.
+Antworte IMMER nur mit genau einem JSON-Objekt (kein Text davor oder danach):
+{"reply": "…", "actions": [ … ], "suggestions": ["…"], "show_live": false, "follow_up": false}
+- reply: was du sagst.
+- actions: Änderungen, die die App ausführen soll (leer, wenn nichts zu tun ist).
+- suggestions: 0–4 kurze Antwort-Knöpfe aus Sicht des Menschen, passend zu deiner Frage (z. B. "Passt ✓", "Lieber morgen", "Später am Tag").
+- show_live: true, wenn der Mensch sehen will, was du änderst ("zeig mir", "live").
+- follow_up: true, wenn du eine Rückfrage gestellt hast und eine Antwort erwartest.
 
-reply: kurz, freundlich, auf Deutsch in Du-Form, 1–3 Sätze. Sag, was du geändert hast. Keine Listen mit Uhrzeiten (die sieht man im Plan).`;
+Aktionen (nur die genannten Felder, Datum immer YYYY-MM-DD, Uhrzeit HH:MM, 24 h):
+- {"type":"add_event","title","date","time","end_time","minutes","location","repeat"} – Termin. Ohne time = ganztägig. repeat: daily|weekdays|weekly|biweekly|monthly|yearly.
+- {"type":"update_event","id","title","date","time","end_time","minutes","location"} – nur geänderte Felder angeben.
+- {"type":"delete_event","id"}
+- {"type":"add_reminder","title","due_date","due_time","minutes","priority","flagged","list","notes","subtasks","repeat","date","time"} – Aufgabe. due_date = Frist; date+time = fester Platz im Plan; minutes = geschätzte Dauer; subtasks = Liste von Texten; priority 0–3.
+- {"type":"update_reminder","id", …gleiche Felder…}
+- {"type":"plan_reminder","id","date","time"} – Aufgabe fest einplanen oder verschieben (date null = wieder automatisch einplanen).
+- {"type":"complete_reminder","id"} · {"type":"delete_reminder","id"}
+- {"type":"add_extra","date","title","minutes","time","after"} – flexibler Eintrag nur für diesen Tag.
+- {"type":"remove_extra","date","title"} – flexiblen Eintrag oder Routine für diesen Tag entfernen.
+- {"type":"set_duration","date","title","minutes"} – Dauer einer Aufgabe, eines flexiblen Eintrags oder einer Routine (nur für diesen Tag) ändern; title darf auch eine aufgabe_id sein.
+- {"type":"add_routine","title","minutes","time","after","repeat"} – wiederkehrend; repeat: school (an Schultagen) | daily | weekdays | weekend | noschool; after "Schule" oder "chain" (nach dem Vorigen).
+- {"type":"study_plan","title","due_date","count","minutes"} – verteilt count Lerneinheiten vor einem Test.
+- {"type":"set_energy","date","level"} – level: müde | normal | fit (müde = Leichtes zuerst, mehr Pausen; fit = Schweres zuerst).
+- {"type":"replan","date"} – ab jetzt neu planen (wenn jemand hinterherhängt oder früher fertig ist).
+- {"type":"cancel_lesson","date","title"} – Stunde (Fach) fällt an dem Tag aus. {"type":"substitute_lesson","date","title","notes","location"} – Vertretung (notes = neues Fach).
+- {"type":"navigate","tab","date","view"} – nur anzeigen. tab: calendar | reminders | plan; view (Kalender): day | week | month.
+- {"type":"focus","id"} – Fokus-Timer für eine Aufgabe starten.
 
-const nullable = t => ({ type: [t, 'null'] });
-const SCHEMA = {
-  type: 'object', additionalProperties: false,
-  required: ['reply', 'actions', 'task_order', 'durations'],
-  properties: {
-    reply: { type: 'string' },
-    actions: {
-      type: 'array',
-      items: {
-        type: 'object', additionalProperties: false,
-        required: ['type', 'title', 'minutes', 'at', 'end', 'after', 'date'],
-        properties: {
-          type: { type: 'string', enum: ['add_extra', 'remove_extra', 'clear_extras', 'add_fixed', 'add_reminder', 'set_duration', 'replan'] },
-          title: nullable('string'), minutes: nullable('integer'), at: nullable('string'),
-          end: nullable('string'), after: nullable('string'), date: nullable('string'),
-        },
-      },
-    },
-    task_order: { type: 'array', items: { type: 'string' } },
-    durations: {
-      type: 'array',
-      items: { type: 'object', additionalProperties: false, required: ['id', 'minutes'], properties: { id: { type: 'string' }, minutes: { type: 'integer' } } },
-    },
-  },
-};
+Regeln:
+- Nutze IDs aus <app_zustand>, wenn du etwas Bestehendes änderst. Erfinde keine IDs.
+- Fehlt etwas Wichtiges (z. B. die Uhrzeit eines Termins), frag kurz nach statt zu raten – aber nur das Nötigste. Dauer darfst du sinnvoll schätzen.
+- Neue Aufgabe mit Frist ("HÜ Mathe bis Freitag"): leg sie an (due_date) und plane sie selbst fest ein (date+time) – in einer Lücke aus "frei" vor der Frist, nicht zu spät am Abend, mit Rücksicht auf die Energie. Sag, wann du sie eingeplant hast, und frag, ob das passt (suggestions z. B. ["Passt ✓","Anderer Tag","Später"]).
+- Bei Tests/Schularbeiten mit Datum: anlegen (priority 3, flagged) und anbieten, einen Lernplan zu machen.
+- Wenn jemand fragt, was ansteht: kurz zusammenfassen und mit navigate den passenden Tag zeigen.
+- "Plane meinen Tag": prüfe den Plan, nutze replan und ggf. plan_reminder/set_duration für eine sinnvolle Reihenfolge, und sag in einem Satz, wie der Nachmittag aussieht.
+- Erfinde keine Termine, die nicht genannt wurden. Lösche nur, wenn klar darum gebeten wird.
+- Wenn der Mensch etwas fragt, das nichts mit der App zu tun hat, antworte kurz und freundlich mit leeren actions.`;
 
 function parseJSON(text) {
-  try { return JSON.parse(text); } catch { }
-  const m = text.match(/\{[\s\S]*\}/);
-  if (m) return JSON.parse(m[0]);
-  throw new Error('Antwort war kein JSON');
+  const t = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+  try { return JSON.parse(t); } catch { }
+  const m = t.match(/\{[\s\S]*\}/);
+  if (m) { try { return JSON.parse(m[0]); } catch { } }
+  return { reply: text.trim(), actions: [] };
 }
+const stripThinking = msgs => msgs.map(m => Array.isArray(m.content)
+  ? { ...m, content: m.content.filter(b => b.type === 'text' || b.type === 'tool_use' || b.type === 'tool_result') }
+  : m).filter(m => typeof m.content === 'string' || m.content.length);
 
-async function run(context, message, settings) {
+async function chat({ history, userText, settings }) {
   if (!sdk) sdk = (await import(SDK_URL)).default;
   const client = new sdk({ apiKey: settings.apiKey, dangerouslyAllowBrowser: true, maxRetries: 1 });
+  const messages = [...history, { role: 'user', content: userText }];
   const base = {
     model: settings.model || 'claude-opus-5-5',
     max_tokens: 16000,
     system: SYSTEM,
-    messages: [{ role: 'user', content: `Tagesdaten:\n${JSON.stringify(context, null, 1)}\n\nNachricht: ${message}` }],
-    output_config: { effort: settings.aiEffort || 'low', format: { type: 'json_schema', schema: SCHEMA } },
+    output_config: { effort: settings.aiEffort || 'low' },
   };
-  let res;
+  const binding = { type: 'adaptive', block_binding: { prefix_mismatch_behavior: 'drop_block' } };
+  let res, sent = messages;
+  const isBad = e => e instanceof sdk.BadRequestError || e?.status === 400;
   try {
-    // Serverseitiger Fallback, falls ein Modell ablehnt
-    res = await client.beta.messages.create({ ...base, betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' });
+    // 1) mit serverseitigem Fallback bei Ablehnungen + tolerantem Umgang mit dem Denk-Verlauf
+    res = await client.beta.messages.create({ ...base, messages, thinking: binding, betas: ['server-side-fallback-2026-07-01', 'thinking-binding-controls-2026-08-01'], fallbacks: 'default', cache_control: { type: 'ephemeral' } });
   } catch (e) {
     if (e instanceof sdk.AuthenticationError) throw new Error('API-Schlüssel ungültig');
-    if (e instanceof sdk.RateLimitError) throw new Error('zu viele Anfragen, kurz warten');
-    if (e instanceof sdk.BadRequestError) {
-      // z. B. wenn das gewählte Modell Fallbacks nicht unterstützt
-      res = await client.messages.create(base);
-    } else throw e;
+    if (e instanceof sdk.RateLimitError) throw new Error('zu viele Anfragen – kurz warten');
+    if (!isBad(e)) throw e;
+    console.warn('Tagwerk KI – Stufe 1:', e.message);
+    try {
+      // 2) ohne Fallback (manche Modelle kennen ihn nicht)
+      res = await client.beta.messages.create({ ...base, messages, thinking: binding, betas: ['thinking-binding-controls-2026-08-01'] });
+    } catch (e2) {
+      if (!isBad(e2)) throw e2;
+      console.warn('Tagwerk KI – Stufe 2:', e2.message);
+      // 3) einfachste Form, Verlauf ohne Denk-Blöcke
+      sent = stripThinking(messages);
+      res = await client.messages.create({ ...base, messages: sent });
+    }
   }
   if (res.stop_reason === 'refusal') throw new Error('Anfrage wurde abgelehnt');
   const text = res.content.filter(b => b.type === 'text').map(b => b.text).join('');
-  const out = parseJSON(text);
-  out.actions = (out.actions || []).map(a => Object.fromEntries(Object.entries(a).filter(([, v]) => v !== null)));
-  return out;
+  if (!text.trim()) throw new Error('leere Antwort');
+  const json = parseJSON(text);
+  json.actions = (Array.isArray(json.actions) ? json.actions : []).map(a => Object.fromEntries(Object.entries(a || {}).filter(([, v]) => v !== null && v !== '')));
+  json.suggestions = Array.isArray(json.suggestions) ? json.suggestions.filter(s => typeof s === 'string') : [];
+  // Antwort unverändert (inkl. Denk-Blöcke) an den Verlauf hängen
+  return { json, history: [...sent, { role: 'assistant', content: res.content }] };
 }
 
-window.TagwerkAI = { run };
-// App neu zeichnen, damit der Knopf "Mit KI planen" erscheint, sobald dieses Modul geladen ist
-window.Tagwerk?.render();
+window.TagwerkAI = { chat };
+window.Tagwerk?.render?.();
+window.Tagwerk?.paintAs?.();

@@ -1,7 +1,7 @@
 // Offline-Cache für die App-Dateien (Netzwerk zuerst, damit Updates sofort ankommen)
-const CACHE = 'tagwerk-v1';
-const FILES = ['./', 'index.html', 'styles.css', 'app.js', 'ai.js', 'manifest.webmanifest',
-  'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png'];
+const CACHE = 'tagwerk-v2';
+const FILES = ['./', 'index.html', 'styles.css', 'core.js', 'planner.js', 'views.js', 'sheets.js', 'assistant.js', 'app.js', 'ai.js',
+  'manifest.webmanifest', 'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));

@@ -15,7 +15,9 @@ function base32Decode(s) {
   return new Uint8Array(out);
 }
 async function totp(secret, time = Date.now(), step = 30, digits = 6) {
-  const key = await crypto.subtle.importKey('raw', base32Decode(secret), { name: 'HMAC', hash: 'SHA-1' }, false, ['sign']);
+  const raw = base32Decode(secret || '');
+  if (!raw.length) return 0; // wie die Untis-App: ohne Schlüssel otp = 0
+  const key = await crypto.subtle.importKey('raw', raw, { name: 'HMAC', hash: 'SHA-1' }, false, ['sign']);
   const counter = Math.floor(time / 1000 / step), buf = new ArrayBuffer(8), dv = new DataView(buf);
   dv.setUint32(0, Math.floor(counter / 2 ** 32)); dv.setUint32(4, counter >>> 0);
   const h = new Uint8Array(await crypto.subtle.sign('HMAC', key, buf)), o = h[h.length - 1] & 15;
@@ -29,7 +31,15 @@ const UNTIS_ERRORS = {
   '-8520': 'Nicht angemeldet – bitte neu verbinden.', '-8509': 'Dein Konto darf diesen Stundenplan nicht sehen.',
   '-8521': 'Dieses Konto ist für die App nicht freigeschaltet.', '-6003': 'Zu viele Treffer – bitte genauer suchen (z. B. Ort dazuschreiben).',
 };
-const untisMsg = e => UNTIS_ERRORS[String(e.code)] || (e.message === 'Failed to fetch' ? 'Keine Verbindung zu WebUntis (Internet prüfen).' : e.message || 'Unbekannter Fehler');
+const untisMsg = e => {
+  const m = String(e.message || '');
+  if (UNTIS_ERRORS[String(e.code)]) return UNTIS_ERRORS[String(e.code)];
+  if (/bad credentials|invalid (user|pass)|authentication ?failed|wrong password/i.test(m)) return 'Benutzername oder Passwort stimmt nicht.';
+  if (/locked/i.test(m)) return 'Dein WebUntis-Konto ist gerade gesperrt – bitte später nochmal versuchen.';
+  if (String(e.code) === '-6002' || /time|clock/i.test(m)) return 'Die Uhrzeit deines Geräts weicht ab – bitte „Automatisch einstellen“ für Datum & Uhrzeit einschalten.';
+  if (m === 'Failed to fetch' || e instanceof TypeError) return 'Keine Verbindung zu WebUntis (Internet prüfen).';
+  return m || 'Unbekannter Fehler';
+};
 async function rpc(url, method, params) {
   const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: String(Date.now()), method, params, jsonrpc: '2.0' }) });
   if (!r.ok) throw new UntisError(r.status, `WebUntis antwortet mit ${r.status}`);
@@ -37,7 +47,16 @@ async function rpc(url, method, params) {
   if (j.error) throw new UntisError(j.error.code, j.error.message);
   return j.result;
 }
-const internUrl = (U, m) => `https://${U.server}/WebUntis/jsonrpc_intern.do?m=${m}&school=${encodeURIComponent(U.school)}&v=i2.2`;
+// Gleiche Adresse wie die echte Untis-Mobile-App (Mitschnitt Android 6.7.0)
+const internUrl = (U, m) => `https://${U.server}/WebUntis/jsonrpc_intern.do?school=${encodeURIComponent(U.school)}&m=${m}&a=false&s=${encodeURIComponent(U.server)}&v=a6.7.0`;
+// QR-Link aus WebUntis (Profil → Freigaben → Untis Mobile → Anzeigen): untis://setschool?url=…&school=…&user=…&key=…
+function parseUntisQR(text) {
+  const m = String(text || '').trim().match(/^untis:\/\/setschool\?(.+)$/i);
+  if (!m) return null;
+  const q = new URLSearchParams(m[1].replace(/\+/g, '%20'));
+  const server = (q.get('url') || '').replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+  return server && q.get('key') ? { server, school: q.get('school') || '', user: q.get('user') || '', key: q.get('key') } : null;
+}
 async function untisAuth(U) { const t = Date.now(); return { clientTime: t, user: U.user, otp: await totp(U.secret, t) }; }
 async function untisSearchSchools(q) {
   const res = await rpc('https://mobile.webuntis.com/ms/schoolquery2', 'searchSchool', [{ search: q }]);
@@ -50,12 +69,28 @@ async function untisGetSecret(U, password) {
   return secret;
 }
 async function untisUserData(U) {
-  return rpc(internUrl(U, 'getUserData2017'), 'getUserData2017', [{ elementId: 0, deviceOs: 'WEB', deviceOsVersion: '', auth: await untisAuth(U) }]);
+  return rpc(internUrl(U, 'getUserData2017'), 'getUserData2017', [{ elementId: 0, deviceOs: 'AND', deviceOsVersion: '', auth: await untisAuth(U) }]);
 }
 async function untisTimetable(U, id, type, startDate, endDate) {
-  return rpc(internUrl(U, 'getTimetable2017'), 'getTimetable2017', [{
-    id, type, startDate, endDate, masterDataTimestamp: 0, timetableTimestamp: 0, timetableTimestamps: [], auth: await untisAuth(U),
-  }]);
+  const days = daysBetween(startDate, endDate) + 1;
+  // Die genaue Form von timetableTimestamps ist nicht dokumentiert → nacheinander die wahrscheinlichsten Varianten probieren
+  let last;
+  for (const stamps of [Array(days).fill(0), [0], []]) {
+    try {
+      return await rpc(internUrl(U, 'getTimetable2017'), 'getTimetable2017', [{
+        id, type, startDate, endDate, masterDataTimestamp: U.masterTs || 0, timetableTimestamp: 0, timetableTimestamps: stamps, auth: await untisAuth(U),
+      }]);
+    } catch (e) { last = e; if (String(e.code).startsWith('-85')) throw e; } // Rechte-/Login-Fehler nicht wiederholen
+  }
+  throw last;
+}
+function takeUserData(U, ud) {
+  U.master = slimMaster(ud?.masterData); U.masterTs = ud?.masterData?.timeStamp || 0;
+  const u = ud?.userData || {}, child = (u.children || [])[0];
+  if (child && (!u.elemId || u.elemType === 'PARENT')) { U.elemType = child.elemType || 'STUDENT'; U.elemId = child.id ?? child.elemId; U.displayName = child.displayName || [child.firstName, child.lastName].filter(Boolean).join(' ') || u.displayName; }
+  else { U.elemType = u.elemType || 'STUDENT'; U.elemId = u.elemId; U.displayName = u.displayName || U.user; }
+  U.klasseId = (u.klassenIds || [])[0] || null;
+  U.masterAt = Date.now();
 }
 
 // ---------- Daten umwandeln ----------
@@ -79,8 +114,10 @@ function periodToLesson(p, M) {
   const S0 = subj ? M.subjects[subj.id] : null, orig = subj && subj.orgId && subj.orgId !== subj.id ? M.subjects[subj.orgId] : null;
   const is = (p.is || []).map(x => String(x).toUpperCase());
   const roomChanged = rooms.some(r => r.orgId && r.orgId !== r.id), teacherChanged = teachers.some(t => t.orgId && t.orgId !== t.id);
-  const status = is.includes('CANCELLED') ? 'cancelled' : is.includes('EXAM') || p.exam ? 'exam' : is.includes('ADDITIONAL') ? 'extra'
-    : (orig || is.includes('SUBSTITUTION') || is.includes('IRREGULAR') || roomChanged || teacherChanged) ? 'changed' : 'normal';
+  // Untis-Status: REGULAR, IRREGULAR (Vertretung/Zusatz/Verlegung), CANCELLED, EXAM
+  const irregular = is.includes('IRREGULAR') || is.includes('SUBSTITUTION') || is.includes('ADDITIONAL');
+  const status = is.includes('CANCELLED') ? 'cancelled' : (is.includes('EXAM') || p.exam) ? 'exam'
+    : (orig || roomChanged || teacherChanged) ? 'changed' : irregular ? 'extra' : 'normal';
   const name = S0?.long || S0?.name || p.text?.lesson || 'Stunde';
   return {
     id: String(p.id), date: st.date, start: st.time, end: en.time,
@@ -204,14 +241,7 @@ function importUntisTasks(days) {
 
 // ---------- Synchronisieren ----------
 async function untisFetchDays(U) {
-  if (!U.master || !U.elemId || Date.now() - (U.masterAt || 0) > 864e5) {
-    const ud = await untisUserData(U);
-    U.master = slimMaster(ud?.masterData);
-    const u = ud?.userData || {};
-    U.elemType = u.elemType || 'STUDENT'; U.elemId = u.elemId; U.displayName = u.displayName || U.user;
-    U.klasseId = (u.klassenIds || [])[0] || null;
-    U.masterAt = Date.now();
-  }
+  if (!U.master || !U.elemId || Date.now() - (U.masterAt || 0) > 864e5) takeUserData(U, await untisUserData(U));
   const start = startOfWeekMon(new Date()), end = addDays(start, 13);
   let tt;
   try { tt = await untisTimetable(U, U.elemId, U.elemType, ymd(start), ymd(end)); }
@@ -220,6 +250,7 @@ async function untisFetchDays(U) {
     else throw e;
   }
   const periods = tt?.timetable?.periods || tt?.periods || [];
+  U.emptyWarning = !periods.length; // manche neuere Untis-Server liefern über diese Schnittstelle nichts
   const days = {};
   for (let d = start; d <= end; d = addDays(d, 1)) days[ymd(d)] = [];
   for (const p of periods) { const l = periodToLesson(p, U.master); if (l && days[l.date]) days[l.date].push(l); }
@@ -257,7 +288,11 @@ function openUntisConnect(initialNote) {
         <p class="help center">Such deine Schule – dann meldest du dich einmal an und ${esc(APP_NAME)} übernimmt deinen Stundenplan. Entfall und Vertretungen kommen automatisch mit.</p>
         <form class="group" data-ux="search"><div class="cell"><span class="em">🔍</span><input type="search" name="q" placeholder="Name oder Ort deiner Schule" value="${esc(st.q || '')}" autocomplete="off" enterkeyhint="search"></div></form>
         ${errHTML()}${st.busy ? '<div class="empty"><span class="typing"><i></i><i></i><i></i></span></div>' : ''}
-        <div class="group">${st.results.map((s, i) => `<button class="cell" data-pick="${i}"><span class="grow"><b>${esc(s.name)}</b><div class="cell-sub">${esc(s.address || s.server)}</div></span><span class="chev">›</span></button>`).join('') || (st.q && !st.busy && !st.err ? '<div class="empty small">Keine Schule gefunden.</div>' : '')}</div>`;
+        <div class="group">${st.results.map((s, i) => `<button class="cell" data-pick="${i}"><span class="grow"><b>${esc(s.name)}</b><div class="cell-sub">${esc(s.address || s.server)}</div></span><span class="chev">›</span></button>`).join('') || (st.q && !st.busy && !st.err ? '<div class="empty small">Keine Schule gefunden.</div>' : '')}</div>
+        <details class="group ux-sso"><summary class="cell action">Du hast einen QR-Code/Link aus WebUntis?</summary>
+          <p class="help">In WebUntis (Browser): <b>Profil</b> → <b>Freigaben</b> → <b>„Zugriff über Untis Mobile“</b> → <b>Anzeigen</b>. Scann den QR-Code mit der Kamera, kopier den Link (beginnt mit <i>untis://</i>) und füg ihn hier ein.</p>
+          <form data-ux="qr"><div class="cell"><input type="text" name="qr" placeholder="untis://setschool?…" autocomplete="off" autocapitalize="off"></div>
+          <button class="cell action" type="submit">Mit QR-Link verbinden</button></form></details>`;
       setTimeout(() => box.querySelector('[name=q]')?.focus(), 250);
     } else if (st.step === 'login') {
       box.innerHTML = `<div class="group"><div class="cell"><span class="em big">🏫</span><span class="grow"><b>${esc(st.school.name)}</b><div class="cell-sub">${esc(st.school.address || st.school.server)}</div></span><button class="link" data-ux="change">ändern</button></div></div>
@@ -271,7 +306,7 @@ function openUntisConnect(initialNote) {
         <details class="group ux-sso"><summary class="cell action">Du meldest dich mit Microsoft oder Google an?</summary>
           <p class="help">Dann nimm den Zugangsschlüssel: Öffne <b>WebUntis im Browser</b> → oben rechts auf <b>dein Profil</b> → Reiter <b>„Freigaben“</b> → bei <b>„Zugriff über Untis Mobile“</b> auf <b>„Anzeigen“</b>. Dort stehen dein Benutzername und der Schlüssel.</p>
           <form data-ux="key"><div class="cell"><span class="grow">Benutzer</span><input class="right" type="text" name="user" autocapitalize="off" value="${esc(S.untis?.user || '')}"></div>
-          <div class="cell"><span class="grow">Schlüssel</span><input class="right" type="text" name="key" autocapitalize="characters" autocomplete="off" placeholder="z. B. ABCD1234…"></div>
+          <div class="cell"><span class="grow">Schlüssel</span><input class="right" type="text" name="key" autocapitalize="characters" autocomplete="off" placeholder="Schlüssel oder untis://-Link"></div>
           <button class="cell action" type="submit">Mit Schlüssel verbinden</button></form></details>`;
     } else if (st.step === 'review') {
       const U = S.untis, pattern = st.days ? buildPattern(st.days) : [];
@@ -282,6 +317,7 @@ function openUntisConnect(initialNote) {
       box.innerHTML = `<div class="ux-ok">✅ Verbunden: <b>${esc(U.displayName || U.user)}</b> · ${esc(U.schoolName || U.school)}${U.usingClass ? ' <small>(Klassenstundenplan)</small>' : ''}</div>
         ${errHTML()}
         ${st.busy ? '<div class="empty"><span class="typing"><i></i><i></i><i></i></span><br>Hole deinen Stundenplan …</div>' : ''}
+        ${!st.busy && U?.emptyWarning && st.days ? `<div class="banner">ℹ️ <span>WebUntis hat für die nächsten zwei Wochen keine Stunden geliefert. Sind gerade Ferien, ist das normal. Sonst unterstützt deine Schule diesen Weg evtl. nicht – dann trag den Stundenplan bitte selbst ein.</span></div>` : ''}
         ${st.conflicts.length ? `<div class="group-title">Zur selben Zeit – welches hast du?</div>${st.conflicts.map((g, gi) => `<div class="group pad"><div class="cell-sub">${WD_LONG[g.wd]}, ${g.items[0].start}</div><div class="chips-row">${[...new Set(g.items.map(i => i.subject))].map(s => {
           const off = g.items.filter(i => i.subject === s).every(i => !untisKeep(i));
           return `<button class="pick ${off ? '' : 'on'}" data-slot="${gi}" data-subj="${esc(s)}">${esc(withEmoji(s))}</button>`; }).join('')}</div></div>`).join('')}` : ''}
@@ -317,7 +353,7 @@ function openUntisConnect(initialNote) {
     const U = { server: st.school.server, school: st.school.school, schoolName: st.school.name, user: user.trim(), secret: (key || '').replace(/\s+/g, '').toUpperCase(), rules: S.untis?.rules || { exclude: [], replace: [], only: [], slots: [] }, note: S.untis?.note || '' };
     try {
       if (!U.secret) U.secret = await untisGetSecret(U, password);
-      await untisUserData(U).then(ud => { U.master = slimMaster(ud?.masterData); const u = ud?.userData || {}; U.elemType = u.elemType || 'STUDENT'; U.elemId = u.elemId; U.displayName = u.displayName || U.user; U.klasseId = (u.klassenIds || [])[0] || null; U.masterAt = Date.now(); });
+      takeUserData(U, await untisUserData(U));
       S.untis = U; save();
       st.step = 'review'; st.busy = false; paint(); await fetchDays();
     } catch (e) { st.busy = false; st.err = untisMsg(e); paint(); }
@@ -331,7 +367,13 @@ function openUntisConnect(initialNote) {
       untisSearchSchools(st.q).then(r => { st.results = r; }).catch(err => { st.err = untisMsg(err); }).finally(() => { st.busy = false; paint(); });
     }
     if (k === 'login') { const pw = f.pw.value; f.pw.value = ''; if (!f.user.value.trim() || !pw) { st.err = 'Bitte Benutzer und Passwort eingeben.'; paint(); return; } connect(f.user.value, pw, null); }
-    if (k === 'key') { if (!f.user.value.trim() || !f.key.value.trim()) { st.err = 'Bitte Benutzer und Schlüssel eingeben.'; paint(); return; } connect(f.user.value, null, f.key.value); }
+    if (k === 'key' || k === 'qr') {
+      const raw = (k === 'qr' ? f.qr.value : f.key.value).trim(), qr = parseUntisQR(raw);
+      if (qr) { st.school = { server: qr.server, school: qr.school || st.school?.school || '', name: st.school?.name || qr.school, address: '' }; connect(qr.user || f.user?.value || '', null, qr.key); return; }
+      if (k === 'qr') { st.err = 'Das ist kein gültiger untis://-Link.'; paint(); return; }
+      if (!f.user.value.trim() || !raw) { st.err = 'Bitte Benutzer und Schlüssel eingeben.'; paint(); return; }
+      connect(f.user.value, null, raw);
+    }
   });
   box.addEventListener('click', async e => {
     const b = e.target.closest('button'); if (!b) return;

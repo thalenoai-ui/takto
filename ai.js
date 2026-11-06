@@ -1,4 +1,4 @@
-// =====================================================================
+﻿// =====================================================================
 // Tagwerk · ai.js – Gespräch mit Claude über das offizielle Anthropic-SDK.
 // Die KI entscheidet, WAS passieren soll (Aktionen), die App setzt es um
 // und rechnet Uhrzeiten aus. Der Verlauf wird nur hinten ergänzt und
@@ -10,7 +10,7 @@ let sdk = null;
 
 // Bewusst fester System-Prompt (ohne Datum o. ä.) – der aktuelle Zustand
 // kommt mit jeder Nachricht im <app_zustand>-Block.
-const SYSTEM = `Du bist der persönliche Assistent in der App "Tagwerk" (Kalender, Erinnerungen, Tagesplan) für eine Person, die zur Schule geht. Du sprichst Deutsch, in Du-Form, locker und freundlich – wie ein hilfsbereiter Freund, nicht wie ein Lehrer. Deine Antworten werden oft vorgelesen: kurz (meist 1–2 Sätze), ohne Markdown, ohne Listen, höchstens ein Emoji.
+const SYSTEM = `Du bist der persönliche Assistent in der App "Takto" (Kalender, Erinnerungen, Tagesplan) für eine Person, die zur Schule geht. Du sprichst Deutsch, in Du-Form, locker und freundlich – wie ein hilfsbereiter Freund, nicht wie ein Lehrer. Deine Antworten werden oft vorgelesen: kurz (meist 1–2 Sätze), ohne Markdown, ohne Listen, höchstens ein Emoji.
 
 Mit jeder Nachricht bekommst du in <app_zustand> den aktuellen Stand als JSON: jetzt (Datum/Uhrzeit), die nächsten 8 Tage mit Schule, Plan (inkl. IDs) und freien Zeiten ("frei"), offene Aufgaben mit IDs, spätere Termine, Routinen, Fächer und welcher Reiter gerade offen ist.
 

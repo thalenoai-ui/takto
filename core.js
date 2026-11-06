@@ -1,4 +1,4 @@
-'use strict';
+﻿'use strict';
 /* =====================================================================
    Tagwerk · core.js – Helfer, Speicher, Termine, Stundenplan, Emojis,
    Statistik und Wetter. Alle anderen Dateien bauen darauf auf.
@@ -78,7 +78,7 @@ const I = {
 };
 
 // ---------- App-Name (sichtbar) – die Speicher-Schlüssel unten bleiben bewusst gleich ----------
-const APP_NAME = 'Tagwerk';
+const APP_NAME = 'Takto';
 
 // ---------- Speicher ----------
 const KEY = 'tagwerk.v1';

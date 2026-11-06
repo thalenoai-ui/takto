@@ -1,5 +1,5 @@
-// Offline-Cache für die App-Dateien (Netzwerk zuerst, damit Updates sofort ankommen)
-const CACHE = 'tagwerk-v3';
+﻿// Offline-Cache für die App-Dateien (Netzwerk zuerst, damit Updates sofort ankommen)
+const CACHE = 'takto-v4';
 const FILES = ['./', 'index.html', 'styles.css', 'core.js', 'planner.js', 'views.js', 'sheets.js', 'untis.js', 'assistant.js', 'app.js', 'ai.js',
   'manifest.webmanifest', 'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png'];
 

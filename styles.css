@@ -361,6 +361,14 @@ svg { display: block; }
 .chips-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .pick { padding: 8px 12px; border-radius: 14px; background: var(--fill); color: var(--text2); font-weight: 600; font-size: 14px; text-decoration: line-through; }
 .pick.on { background: var(--accent); color: #fff; text-decoration: none; }
+.scan-thumbs { display: flex; gap: 10px; flex-wrap: wrap; margin: 4px 16px 18px; }
+.thumb { position: relative; width: 96px; height: 128px; border-radius: 14px; overflow: hidden; background: var(--bg2); box-shadow: var(--card-shadow); }
+.thumb img { width: 100%; height: 100%; object-fit: cover; }
+.thumb button { position: absolute; top: 4px; right: 4px; width: 24px; height: 24px; border-radius: 50%; background: rgba(0, 0, 0, .55); color: #fff; }
+.thumb.add { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; color: var(--accent); font-size: 30px; cursor: pointer; border: 2px dashed var(--accent-soft); }
+.thumb.add span { font-size: 12px; font-weight: 700; text-align: center; padding: 0 6px; }
+.scan-key { width: 100%; border: 0; outline: none; background: var(--fill); border-radius: 10px; padding: 10px 12px; font-size: 15px; }
+.pick.sm { padding: 4px 9px; font-size: 12.5px; border-radius: 10px; }
 .step { width: 24px; height: 24px; border-radius: 50%; background: var(--accent); color: #fff; display: grid; place-items: center; font-size: 13px; font-weight: 800; flex-shrink: 0; }
 a.cell { text-decoration: none; }
 .ob-actions { display: flex; flex-direction: column; gap: 10px; margin: 0 20px 6px; }

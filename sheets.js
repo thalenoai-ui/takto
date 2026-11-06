@@ -526,10 +526,11 @@ function openTimetable() {
         ${U.error ? `<p class="err-t">⚠️ ${esc(U.error)}</p>` : ''}
         <textarea data-untis-note rows="2" placeholder="Hinweis (optional): z. B. „Religion habe ich nicht“">${esc(U.note || '')}</textarea>
         <div class="hint-actions"><button class="btn primary" data-untis-sync>Aktualisieren</button><button class="btn secondary" data-untis-open>Fächer & Verbindung</button></div></div>`;
-    return `<div class="card import-card"><div class="ic-top"><span class="ic-ico">📲</span><div><b>Aus WebUntis übernehmen</b>
-        <div class="cell-sub">Ein Tipp – dein Stundenplan ist da. Entfall, Vertretungen und Prüfungen kommen automatisch mit.</div></div></div>
+    return `<div class="card import-card"><div class="ic-top"><span class="ic-ico">📸</span><div><b>Per Screenshot übernehmen</b>
+        <div class="cell-sub">Screenshot der Wochenansicht aus Untis hochladen – die KI liest deinen Stundenplan aus.</div></div></div>
         <textarea data-untis-note rows="2" placeholder="Hinweis (optional): z. B. „Religion habe ich nicht, Latein statt Französisch“"></textarea>
-        <button class="btn primary" data-untis-open>Von WebUntis übernehmen</button></div>`;
+        <button class="btn primary" data-scan-open>Screenshot hochladen</button>
+        <button class="link" data-untis-open>oder direkt mit WebUntis verbinden (Test)</button></div>`;
   };
   openSheet({
     title: 'Stundenplan', left: '', right: 'Fertig',
@@ -540,6 +541,7 @@ function openTimetable() {
         const t = e.target.closest('button'); if (!t) return;
         const note = all.querySelector('[data-untis-note]')?.value || '';
         if (t.dataset.untisOpen !== undefined) { close(); openUntisConnect(note); }
+        if (t.dataset.scanOpen !== undefined) { close(); openTimetableScan(note); }
         if (t.dataset.untisSync !== undefined) {
           t.disabled = true; t.textContent = 'Lade …';
           if (note !== (S.untis.note || '')) {
@@ -810,8 +812,8 @@ function openOnboarding() {
   const steps = [
     () => `<div class="ob-hero ob-logo"><img src="icons/icon-192.png" alt=""></div><h2>Willkommen bei ${APP_NAME}</h2><p>Kalender, Erinnerungen und ein Tagesplan, der sich selbst um deine Schule herum plant – alles in einer App.</p>
       <div class="group"><div class="cell"><input type="text" data-ob="name" placeholder="Wie heißt du? (für die Begrüßung)" value="${esc(draft.name)}"></div></div>`,
-    () => `<div class="ob-hero">🏫</div><h2>Dein Stundenplan</h2><p>Hol ihn mit einem Tipp aus WebUntis – Entfall und Vertretungen kommen dann automatisch mit. ${APP_NAME} plant Hausübungen und Lernen in die freien Zeiten.</p>
-      <div class="ob-actions"><button class="btn primary" data-ob-act="untis">📲 Aus WebUntis übernehmen</button><button class="btn secondary" data-ob-act="tt">Selbst eintragen</button></div>
+    () => `<div class="ob-hero">🏫</div><h2>Dein Stundenplan</h2><p>Mach in Untis einen Screenshot deiner Wochenansicht – die KI liest den Stundenplan daraus aus. ${APP_NAME} plant Hausübungen und Lernen dann in die freien Zeiten.</p>
+      <div class="ob-actions"><button class="btn primary" data-ob-act="scan">📸 Screenshot hochladen</button><button class="btn secondary" data-ob-act="tt">Selbst eintragen</button></div>
       <p class="help center">${S.untis?.secret ? '✅ Mit WebUntis verbunden' : S.timetable.length ? `${S.timetable.length} Stunden eingetragen` : 'Geht auch später unter Einstellungen.'}</p>`,
     () => `<div class="ob-hero">📅</div><h2>Google-Kalender holen</h2><p>Kopier deine Termine einmal aus Google. Training, Bandprobe & Co. bleiben dann im Tagesplan fix.</p>
       <div class="ob-actions"><button class="btn primary" data-ob-act="cal">📅 Aus Google übernehmen</button></div>
@@ -845,6 +847,7 @@ function openOnboarding() {
     if (a === 'skip') finish();
     if (a === 'tt') { openTimetable(); }
     if (a === 'untis') { openUntisConnect(); }
+    if (a === 'scan') { openTimetableScan(); }
     if (a === 'cal') { openCalendars(); }
   });
   paint();

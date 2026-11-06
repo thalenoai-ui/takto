@@ -61,7 +61,7 @@ function openEventEditor(ev, o = {}) {
     <div class="group"><div class="cell"><textarea name="notes" placeholder="Notizen">${esc(d.notes)}</textarea></div></div>
     ${!isNew ? (d.rrule ? `<div class="group"><button class="cell danger" data-x="del-one">Nur diesen Termin löschen</button><button class="cell danger" data-x="del-all">Alle zukünftigen löschen</button></div>`
       : `<div class="group"><button class="cell danger" data-x="del-all">Ereignis löschen</button></div>`) : ''}
-    ${d.source === 'google' ? '<p class="help">Aus Google kopiert. Änderungen bleiben nur in Tagwerk.</p>' : ''}`;
+    ${d.source === 'google' ? `<p class="help">Aus Google kopiert. Änderungen bleiben nur in ${APP_NAME}.</p>` : ''}`;
   openSheet({
     title: isNew ? 'Neues Ereignis' : 'Ereignis', right: isNew ? 'Hinzufügen' : 'Fertig', body,
     onOpen(sh, close) {
@@ -242,39 +242,120 @@ function quickAdd(el) {
 // =====================================================================
 //  Kalenderliste, ICS-Import, Google
 // =====================================================================
+// ---------- Kalender-Regeln aus dem Hinweisfeld ("Geburtstage weglassen", "nur Privat") ----------
+const KW_SYN = { geburtstag: ['geburtstag', 'birthday'], feiertag: ['feiertag', 'holiday', 'feiertage in'], ferien: ['ferien', 'vacation'] };
+function expandKw(list) {
+  const out = new Set();
+  for (const x of list || []) {
+    const w = String(x).toLowerCase().trim(); if (!w) continue; out.add(w);
+    const stem = w.replace(/(en|e|s|n)$/, '');
+    for (const [base, syn] of Object.entries(KW_SYN)) if (stem.length >= 4 && (stem.startsWith(base) || base.startsWith(stem))) syn.forEach(s => out.add(s));
+  }
+  return [...out];
+}
+function calSkip(calName, title) {
+  const R = S.calRules || {}, c = (calName || '').toLowerCase(), t = (title || '').toLowerCase();
+  if (R.only?.length && !expandKw(R.only).some(k => c.includes(k))) return true;
+  return expandKw(R.exclude).some(k => c.includes(k) || (t && t.includes(k)));
+}
+async function setCalNote(note, names = []) {
+  const known = [...new Set([...names, ...S.calendars.map(c => c.name), 'Geburtstage', 'Feiertage'])];
+  const r = await interpretNote('Kalender und Termine', note, known);
+  S.calRules = { note, exclude: r.exclude || [], only: r.only || [] };
+  const before = S.events.length;
+  S.events = S.events.filter(e => { const cal = calById(e.calendarId); return !cal || cal.source === 'local' || !calSkip(cal.name, e.title); });
+  return before - S.events.length;
+}
+// ---------- ZIP-Export von Google direkt lesen (ohne Entpacken) ----------
+async function unzipIcs(buf) {
+  const dv = new DataView(buf), u8 = new Uint8Array(buf), dec = new TextDecoder(), out = [];
+  let eocd = -1;
+  for (let i = buf.byteLength - 22; i >= Math.max(0, buf.byteLength - 66000); i--) if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  if (eocd < 0) throw new Error('keine gültige ZIP-Datei');
+  const count = dv.getUint16(eocd + 10, true); let p = dv.getUint32(eocd + 16, true);
+  for (let n = 0; n < count; n++) {
+    if (dv.getUint32(p, true) !== 0x02014b50) break;
+    const method = dv.getUint16(p + 10, true), csize = dv.getUint32(p + 20, true), nlen = dv.getUint16(p + 28, true), xlen = dv.getUint16(p + 30, true), clen = dv.getUint16(p + 32, true), off = dv.getUint32(p + 42, true);
+    const name = dec.decode(u8.subarray(p + 46, p + 46 + nlen));
+    p += 46 + nlen + xlen + clen;
+    if (!/\.ics$/i.test(name)) continue;
+    const start = off + 30 + dv.getUint16(off + 26, true) + dv.getUint16(off + 28, true), data = u8.subarray(start, start + csize);
+    let text;
+    if (method === 0) text = dec.decode(data);
+    else if (method === 8) text = await new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).text();
+    else continue;
+    out.push({ name: name.split('/').pop(), text });
+  }
+  return out;
+}
+async function importCalendarFiles(files) {
+  let n = 0, cals = 0;
+  for (const f of files) {
+    const parts = /\.zip$/i.test(f.name) || f.type === 'application/zip' ? await unzipIcs(await f.arrayBuffer()) : [{ name: f.name, text: await f.text() }];
+    for (const x of parts) { const k = importICS(x.text, x.name); if (k) cals++; n += k; }
+  }
+  save(); render();
+  return { n, cals };
+}
+function openGoogleGuide(onDone) {
+  const isIOS = /iphone|ipad/i.test(navigator.userAgent);
+  const { el, close } = openSheet({
+    title: 'Google-Kalender holen', left: 'Abbrechen', right: '',
+    body: `<p class="help">Google gibt Kalender nur über einen Export heraus. Zwei kurze Schritte:</p>
+      <div class="group">
+        <a class="cell action" href="https://calendar.google.com/calendar/u/0/r/settings/export" target="_blank" rel="noopener"><span class="step">1</span><span class="grow">Google-Export öffnen<div class="cell-sub">Dort auf „Exportieren“ tippen – Google lädt eine ZIP-Datei herunter.</div></span><span class="chev">↗</span></a>
+        <label class="cell action" style="cursor:pointer"><span class="step">2</span><span class="grow">Heruntergeladene Datei auswählen<div class="cell-sub">${isIOS ? 'In der Dateien-App unter „Downloads“' : 'Meist im Ordner „Downloads“'} – die ZIP-Datei geht direkt.</div></span><input type="file" accept=".ics,.zip,text/calendar,application/zip" multiple hidden data-gfile></label>
+      </div>
+      <p class="help">Du nutzt iCloud oder Outlook? Dort kannst du einen Kalender ebenfalls als .ics-Datei exportieren und hier auswählen.</p>
+      ${S.settings.googleClientId ? '' : '<p class="help">Profi-Weg ohne Datei: Mit einer Google-<i>Client-ID</i> (Einstellungen → Google) reicht künftig ein Tipp.</p>'}`,
+  });
+  el.querySelector('[data-gfile]').addEventListener('change', async e => {
+    if (!e.target.files?.length) return;
+    try { const r = await importCalendarFiles([...e.target.files]); close(); toast(`📅 ${r.n} Termine aus ${r.cals} Kalender${r.cals === 1 ? '' : 'n'} übernommen ✓`); onDone?.(); }
+    catch (err) { toast('Import fehlgeschlagen: ' + err.message, { ms: 5000 }); }
+  });
+}
 function openCalendars() {
   const paint = () => `
+    <div class="card import-card"><div class="ic-top"><span class="ic-ico">📅</span><div><b>Aus Google übernehmen</b>
+      <div class="cell-sub">Kopiert deine Google-Termine in ${esc(APP_NAME)}. Training & Co. bleiben im Tagesplan fix.</div></div></div>
+      <textarea data-cal-note rows="2" placeholder="Hinweis (optional): z. B. „Geburtstage und Feiertage weglassen“">${esc(S.calRules?.note || '')}</textarea>
+      ${S.calRules?.exclude?.length || S.calRules?.only?.length ? `<p class="cell-sub">Gilt beim Import: ${[...(S.calRules.exclude || []).map(x => 'ohne ' + x), ...(S.calRules.only || []).map(x => 'nur ' + x)].map(esc).join(' · ')}</p>` : ''}
+      <div class="hint-actions"><button class="btn primary" data-google-go>Von Google übernehmen</button>
+      <label class="btn secondary file-btn">Datei wählen<input type="file" accept=".ics,.zip,text/calendar,application/zip" multiple hidden data-ics></label></div></div>
     <div class="group-title">Meine Kalender</div>
     <div class="group">${S.calendars.map(c => `<div class="cell"><button class="swatch" style="background:${c.color}" data-cal-color="${c.id}" aria-label="Farbe ändern"></button>
       <span class="grow">${esc(c.name)}<div class="cell-sub">${c.source === 'google' ? 'Google' : c.source === 'ics' ? 'Importiert' : 'Lokal'} · ${S.events.filter(e => e.calendarId === c.id).length} Termine</div></span>
       <label class="switch"><input type="checkbox" data-cal-vis="${c.id}" ${c.visible !== false ? 'checked' : ''}><span></span></label>
       ${S.calendars.length > 1 ? `<button class="x-btn" data-cal-del="${c.id}" aria-label="Löschen">×</button>` : ''}</div>`).join('')}
       <button class="cell action" data-cal-add>+ Kalender hinzufügen</button></div>
-    <div class="group-title">Google Kalender kopieren</div>
-    <div class="group">
-      <button class="cell action" data-google>Mit Google-Konto verbinden & kopieren</button>
-      <label class="cell action" style="cursor:pointer">ICS-Datei importieren (.ics)<input type="file" accept=".ics,text/calendar" multiple hidden data-ics></label></div>
-    <div class="help">
-      <b>Weg 1 – Datei (klappt immer):</b>
-      <ol><li>Am Computer <i>calendar.google.com</i> → Zahnrad → <i>Einstellungen</i> → <i>Importieren & Exportieren</i> → <i>Exportieren</i>.</li>
-      <li>Die ZIP-Datei entpacken (am iPhone in der <i>Dateien</i>-App antippen).</li>
-      <li>Hier „ICS-Datei importieren“ antippen und die .ics-Dateien wählen. Ein erneuter Import aktualisiert den Kalender.</li></ol>
-      <b>Weg 2 – Google-Login:</b> braucht einmalig eine kostenlose <i>Client-ID</i> (Einstellungen → Google).
-    </div>`;
+    <p class="help">Tipp auf den Farbpunkt, um die Farbe zu ändern. Ein erneuter Import aktualisiert einen Kalender, statt ihn doppelt anzulegen.</p>`;
   openSheet({
     title: 'Kalender', left: '', right: 'Fertig', body: paint(),
     onOpen(sh) {
       const body = sh.querySelector('.sheet-body'), repaint = () => { body.innerHTML = paint(); };
+      const noteNow = async () => {
+        const note = body.querySelector('[data-cal-note]')?.value || '';
+        if (note === (S.calRules?.note || '')) return;
+        const removed = await setCalNote(note); save(); render();
+        if (removed) toast(`${removed} vorhandene Termine passend zum Hinweis entfernt`);
+      };
       body.addEventListener('change', async e => {
         const t = e.target;
         if (t.dataset.calVis) { calById(t.dataset.calVis).visible = t.checked; save(); render(); }
         if (t.dataset.ics !== undefined && t.files?.length) {
-          let n = 0; for (const f of t.files) n += importICS(await f.text(), f.name);
-          save(); render(); repaint(); toast(`${n} Termine importiert ✓`);
+          await noteNow();
+          try { const r = await importCalendarFiles([...t.files]); repaint(); toast(`📅 ${r.n} Termine übernommen ✓`); }
+          catch (err) { toast('Import fehlgeschlagen: ' + err.message, { ms: 5000 }); }
         }
       });
-      body.addEventListener('click', e => {
+      body.addEventListener('click', async e => {
         const t = e.target.closest('button'); if (!t) return;
+        if (t.dataset.googleGo !== undefined) {
+          t.disabled = true; await noteNow(); t.disabled = false;
+          if (S.settings.googleClientId) { await googleSync(); repaint(); } else openGoogleGuide(repaint);
+          return;
+        }
         if (t.dataset.calColor) { const c = calById(t.dataset.calColor); c.color = COLORS[(COLORS.indexOf(c.color) + 1) % COLORS.length]; save(); render(); repaint(); }
         if (t.dataset.calDel) {
           const c = calById(t.dataset.calDel), undo = makeUndo();
@@ -345,12 +426,15 @@ function importICS(text, fileName = 'Import') {
     else cur[name] = { value, params };
   }
   if (!vevents.length) { toast(`In „${fileName}“ wurden keine Termine gefunden.`); return 0; }
+  if (calSkip(calName, '')) return 0; // ganzer Kalender laut Hinweis weglassen
+  if (S.calendars.some(c => c.source === 'local' && c.name.toLowerCase() === calName.toLowerCase())) calName += /gmail|google/i.test(fileName) ? ' (Google)' : ' (Import)';
   let cal = S.calendars.find(c => c.source === 'ics' && c.name === calName);
   if (cal) S.events = S.events.filter(e => e.calendarId !== cal.id);
   else { cal = { id: uid(), name: calName, color: COLORS[(S.calendars.length + 5) % COLORS.length], visible: true, source: 'ics' }; S.calendars.push(cal); }
   const out = [], overrides = [];
   for (const v of vevents) {
     if (v.STATUS?.value === 'CANCELLED') continue;
+    if (calSkip(calName, unesc(v.SUMMARY?.value))) continue;
     const s = icsDate(v.DTSTART); if (!s) continue;
     let e = icsDate(v.DTEND);
     if (!e) e = { local: v.DURATION ? toLocal(new Date(parseLocal(s.local).getTime() + parseDuration(v.DURATION.value))) : (s.allDay ? toLocal(addDays(parseLocal(s.local), 1)) : s.local) };
@@ -392,13 +476,14 @@ async function googleSync() {
     const tMin = encodeURIComponent(addDays(new Date(), -180).toISOString()), tMax = encodeURIComponent(addDays(new Date(), 400).toISOString());
     let total = 0;
     for (const c of list.items || []) {
+      if (calSkip(c.summaryOverride || c.summary, '')) continue; // laut Hinweis weglassen
       let cal = S.calendars.find(x => x.gid === c.id);
       if (!cal) { cal = { id: uid(), gid: c.id, name: c.summaryOverride || c.summary, color: c.backgroundColor || COLORS[S.calendars.length % COLORS.length], visible: c.selected !== false, source: 'google' }; S.calendars.push(cal); }
       const fresh = []; let pt = '';
       do {
         const d = await api(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(c.id)}/events?singleEvents=true&orderBy=startTime&maxResults=2500&timeMin=${tMin}&timeMax=${tMax}${pt ? '&pageToken=' + pt : ''}`);
         for (const it of d.items || []) {
-          if (it.status === 'cancelled' || !it.start) continue;
+          if (it.status === 'cancelled' || !it.start || calSkip(cal.name, it.summary)) continue;
           const allDay = !!it.start.date;
           fresh.push({ id: uid(), gid: it.id, title: it.summary || '(Ohne Titel)', location: it.location || '', notes: it.description || '',
             start: allDay ? it.start.date + 'T00:00' : toLocal(new Date(it.start.dateTime)), end: allDay ? it.end.date + 'T00:00' : toLocal(new Date(it.end.dateTime)),
@@ -434,10 +519,39 @@ function openTimetable() {
     <p class="help">Aufgaben, in denen ein Fach vorkommt (z. B. „Mathe HÜ“), bekommen automatisch diese Farbe.</p>` : '') +
     `<div class="group-title">Stundenzeiten deiner Schule</div><div class="group"><div class="cell"><textarea data-lt rows="4">${esc(S.settings.lessonTimes.join('\n'))}</textarea></div></div>
     <p class="help">Eine Zeile pro Stunde (z. B. <i>07:50-08:40</i>). „+ Stunde“ nimmt automatisch die nächste Zeit. A/B-Wochen schaltest du in den Einstellungen ein. Entfall und Vertretung trägst du direkt im Kalender ein: auf die Schule tippen.</p>`;
+  const untisCard = () => {
+    const U = S.untis;
+    if (U?.secret) return `<div class="card import-card"><div class="ic-top"><span class="ic-ico">📲</span><div><b>Mit WebUntis verbunden</b>
+        <div class="cell-sub">${esc(U.schoolName || U.school)} · ${esc(U.displayName || U.user)} · aktualisiert ${untisAgo()}</div></div></div>
+        ${U.error ? `<p class="err-t">⚠️ ${esc(U.error)}</p>` : ''}
+        <textarea data-untis-note rows="2" placeholder="Hinweis (optional): z. B. „Religion habe ich nicht“">${esc(U.note || '')}</textarea>
+        <div class="hint-actions"><button class="btn primary" data-untis-sync>Aktualisieren</button><button class="btn secondary" data-untis-open>Fächer & Verbindung</button></div></div>`;
+    return `<div class="card import-card"><div class="ic-top"><span class="ic-ico">📲</span><div><b>Aus WebUntis übernehmen</b>
+        <div class="cell-sub">Ein Tipp – dein Stundenplan ist da. Entfall, Vertretungen und Prüfungen kommen automatisch mit.</div></div></div>
+        <textarea data-untis-note rows="2" placeholder="Hinweis (optional): z. B. „Religion habe ich nicht, Latein statt Französisch“"></textarea>
+        <button class="btn primary" data-untis-open>Von WebUntis übernehmen</button></div>`;
+  };
   openSheet({
-    title: 'Stundenplan', left: '', right: 'Fertig', body: paint(),
-    onOpen(sh) {
-      const body = sh.querySelector('.sheet-body');
+    title: 'Stundenplan', left: '', right: 'Fertig',
+    body: `<div class="tt-import">${untisCard()}</div><details class="tt-manual" ${S.timetable.length && !S.untis ? 'open' : ''}><summary>✏️ Selbst eintragen oder bearbeiten</summary><div class="tt-man">${paint()}</div></details>`,
+    onOpen(sh, close) {
+      const body = sh.querySelector('.tt-man'), all = sh.querySelector('.sheet-body');
+      all.addEventListener('click', async e => {
+        const t = e.target.closest('button'); if (!t) return;
+        const note = all.querySelector('[data-untis-note]')?.value || '';
+        if (t.dataset.untisOpen !== undefined) { close(); openUntisConnect(note); }
+        if (t.dataset.untisSync !== undefined) {
+          t.disabled = true; t.textContent = 'Lade …';
+          if (note !== (S.untis.note || '')) {
+            S.untis.note = note;
+            const names = [...new Set(buildPattern(S.untis.days || {}).map(l => l.subject))];
+            const r = await interpretNote('Schulfächer im Stundenplan', note, names);
+            S.untis.rules = { ...(S.untis.rules || {}), exclude: r.exclude, replace: r.replace, only: r.only };
+          }
+          if (await untisSync()) { applyUntisToTimetable(); save(); render(); }
+          sh.querySelector('.tt-import').innerHTML = untisCard(); body.innerHTML = paint();
+        }
+      });
       body.addEventListener('change', e => {
         const t = e.target;
         if (t.dataset.tt) { const l = S.timetable.find(x => x.id === t.dataset.tt); if (l) { l[t.dataset.f] = t.value; save(); render(); } }
@@ -469,7 +583,7 @@ function openLessonDay(date) {
   const paint = () => {
     const ls = lessonsOn(date, true);
     if (!ls.length) return `<div class="empty">An diesem Tag steht nichts im Stundenplan.</div><div class="group"><button class="cell action" data-open-tt>Stundenplan bearbeiten</button></div>`;
-    return `<p class="help">Änderungen gelten nur für <b>${esc(dueLabel(date))}</b>. Fällt eine Stunde aus, plant Tagwerk deinen Nachmittag automatisch neu.</p>
+    return `<p class="help">Änderungen gelten nur für <b>${esc(dueLabel(date))}</b>. Fällt eine Stunde aus, plant ${APP_NAME} deinen Nachmittag automatisch neu.</p>
       <div class="group">${ls.map(l => `<div class="cell tt-cell ${l.cancelled ? 'is-cancelled' : ''}">
         <div class="ld-top"><span class="ld-time">${l.start}–${l.end}</span><span class="grow"><b>${esc(withEmoji(l.origSubject || l.subject))}</b>${l.substituted ? ` → ${esc(l.subject)}` : ''}<div class="cell-sub">${esc([l.room, l.teacher].filter(Boolean).join(' · ') || ' ')}</div></span>
           <span class="ld-lbl">Entfällt</span><label class="switch"><input type="checkbox" data-cancel="${l.id}" ${l.cancelled ? 'checked' : ''}><span></span></label></div>
@@ -694,12 +808,14 @@ function openOnboarding() {
   const picks = new Set(['Heimfahrt', 'Mittagessen']);
   const draft = { name: S.settings.userName, city: S.settings.weatherCity, key: S.settings.apiKey };
   const steps = [
-    () => `<div class="ob-hero">👋</div><h2>Willkommen bei Tagwerk</h2><p>Kalender, Erinnerungen und ein Tagesplan, der sich selbst um deine Schule herum plant – alles in einer App.</p>
+    () => `<div class="ob-hero ob-logo"><img src="icons/icon-192.png" alt=""></div><h2>Willkommen bei ${APP_NAME}</h2><p>Kalender, Erinnerungen und ein Tagesplan, der sich selbst um deine Schule herum plant – alles in einer App.</p>
       <div class="group"><div class="cell"><input type="text" data-ob="name" placeholder="Wie heißt du? (für die Begrüßung)" value="${esc(draft.name)}"></div></div>`,
-    () => `<div class="ob-hero">🏫</div><h2>Dein Stundenplan</h2><p>Trag einmal deine Stunden ein. Danach weiß Tagwerk immer, wann du Schule hast – und plant Hausübungen und Lernen in die freien Zeiten.</p>
-      <div class="group"><button class="cell action" data-ob-act="tt">Stundenplan eintragen (${S.timetable.length} Stunden)</button></div><p class="help center">Geht auch später unter Einstellungen.</p>`,
+    () => `<div class="ob-hero">🏫</div><h2>Dein Stundenplan</h2><p>Hol ihn mit einem Tipp aus WebUntis – Entfall und Vertretungen kommen dann automatisch mit. ${APP_NAME} plant Hausübungen und Lernen in die freien Zeiten.</p>
+      <div class="ob-actions"><button class="btn primary" data-ob-act="untis">📲 Aus WebUntis übernehmen</button><button class="btn secondary" data-ob-act="tt">Selbst eintragen</button></div>
+      <p class="help center">${S.untis?.secret ? '✅ Mit WebUntis verbunden' : S.timetable.length ? `${S.timetable.length} Stunden eingetragen` : 'Geht auch später unter Einstellungen.'}</p>`,
     () => `<div class="ob-hero">📅</div><h2>Google-Kalender holen</h2><p>Kopier deine Termine einmal aus Google. Training, Bandprobe & Co. bleiben dann im Tagesplan fix.</p>
-      <div class="group"><button class="cell action" data-ob-act="cal">Kalender importieren (${S.events.length} Termine)</button></div>`,
+      <div class="ob-actions"><button class="btn primary" data-ob-act="cal">📅 Aus Google übernehmen</button></div>
+      <p class="help center">${S.events.length ? `${S.events.length} Termine übernommen ✓` : 'Geht auch später im Kalender oben links.'}</p>`,
     () => `<div class="ob-hero">🔁</div><h2>Was machst du jeden Tag?</h2><p>Diese Routinen plane ich automatisch ein:</p>
       <div class="group">${ROUTINE_PRESETS.slice(0, 4).map(p => `<label class="cell"><span class="em big">${emojiFor(p[0])}</span><span class="grow">${p[0]}<div class="cell-sub">${p[1]} min · ${p[2] === 'after_school' ? 'nach der Schule' : p[2] === 'at' ? 'um ' + p[3] : 'danach'}</div></span><label class="switch"><input type="checkbox" data-ob-rt="${p[0]}" ${picks.has(p[0]) ? 'checked' : ''}><span></span></label></label>`).join('')}</div>
       <div class="group"><div class="cell"><span class="em big">🌤️</span><input type="text" data-ob="city" placeholder="Dein Ort fürs Wetter (z. B. Wien)" value="${esc(draft.city)}"></div></div>`,
@@ -728,6 +844,7 @@ function openOnboarding() {
     if (a === 'back') { step--; paint(); }
     if (a === 'skip') finish();
     if (a === 'tt') { openTimetable(); }
+    if (a === 'untis') { openUntisConnect(); }
     if (a === 'cal') { openCalendars(); }
   });
   paint();
@@ -750,7 +867,8 @@ function openSettings() {
       ${sel('Pause nach Aufgabe', 'breakMin', [0, 5, 10, 15, 20].map(m => [m, m + ' min']))}
       ${sel('Standarddauer Aufgabe', 'defaultTaskMin', [15, 20, 30, 45, 60].map(m => [m, m + ' min']))}
       ${inp('Tagesabschluss ab', 'eveningReview', 'time')}
-      ${link('Routinen', 'routines', S.routines.length + '')}${link('Stundenplan', 'timetable', S.timetable.length + ' Stunden')}</div>
+      ${link('Routinen', 'routines', S.routines.length + '')}${link('Stundenplan', 'timetable', S.timetable.length + ' Stunden')}
+      ${link('📲 WebUntis', 'untis', S.untis?.secret ? 'verbunden · ' + untisAgo() : 'nicht verbunden')}</div>
     <div class="group-title">Belohnungen & Fokus</div><div class="group">
       ${tog('Belohnungen einplanen', 'rewards', 'Nach längerem Lernen kommt automatisch Freizeit')}
       ${sel('… nach', 'rewardAfterMin', [45, 60, 90, 120].map(m => [m, durLabel(m) + ' Arbeit']))}
@@ -812,10 +930,11 @@ function openSettings() {
         if (t.dataset.restore !== undefined && t.files?.[0]) {
           try {
             const data = JSON.parse(await t.files[0].text());
-            if (!data.settings || !data.events) throw new Error('kein Tagwerk-Backup');
+            if (!data.settings || !data.events) throw new Error(`kein ${APP_NAME}-Backup`);
             if (!confirm('Backup laden? Die aktuellen Daten werden ersetzt.')) return;
-            const key = S.settings.apiKey;
+            const key = S.settings.apiKey, oldUntis = S.untis;
             S = migrate(data); if (!S.settings.apiKey) S.settings.apiKey = key;
+            if (S.untis && !S.untis.secret && oldUntis?.secret && oldUntis.server === S.untis.server && oldUntis.user === S.untis.user) S.untis.secret = oldUntis.secret;
             save(); applyTheme(); render(); close(); toast('Backup geladen ✓');
           } catch (err) { toast('Backup ungültig: ' + err.message); }
         }
@@ -825,9 +944,10 @@ function openSettings() {
         if (t.dataset.open === 'timetable') openTimetable();
         if (t.dataset.open === 'calendars') openCalendars();
         if (t.dataset.open === 'routines') openRoutines();
+        if (t.dataset.open === 'untis') { close(); openUntisConnect(); }
         if (t.dataset.backup !== undefined) {
-          const blob = new Blob([JSON.stringify({ ...S, settings: { ...S.settings, apiKey: '' } }, null, 1)], { type: 'application/json' });
-          const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `tagwerk-backup-${todayStr()}.json`; a.click();
+          const blob = new Blob([JSON.stringify({ ...S, settings: { ...S.settings, apiKey: '' }, untis: S.untis ? { ...S.untis, secret: '' } : null }, null, 1)], { type: 'application/json' });
+          const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `${APP_NAME.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-backup-${todayStr()}.json`; a.click();
           setTimeout(() => URL.revokeObjectURL(a.href), 4000);
         }
         if (t.dataset.intro !== undefined) { close(); setTimeout(openOnboarding, 250); }

@@ -77,6 +77,9 @@ const I = {
   eye: '<svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>',
 };
 
+// ---------- App-Name (sichtbar) – die Speicher-Schlüssel unten bleiben bewusst gleich ----------
+const APP_NAME = 'Tagwerk';
+
 // ---------- Speicher ----------
 const KEY = 'tagwerk.v1';
 function defaults() {
@@ -107,6 +110,8 @@ function migrate(s) {
   const d = defaults();
   s = { ...d, ...s, settings: { ...d.settings, ...(s.settings || {}) } };
   s.routines ||= []; s.ttOverrides ||= {}; s.doneLog ||= []; s.subjectColors ||= {}; s.plans ||= {};
+  s.untis ??= null; s.calRules ||= { note: '', exclude: [], only: [] };
+  if (s.untis?.days) { const old2 = ymd(addDays(new Date(), -14)); for (const k of Object.keys(s.untis.days)) if (k < old2) delete s.untis.days[k]; }
   for (const r of s.reminders) { r.subtasks ||= []; r.repeat ??= null; r.planDate ??= null; r.planTime ??= null; r.postponed ??= 0; r.notes ??= ''; }
   for (const l of s.timetable) { l.week ||= 'all'; l.teacher ??= ''; l.room ??= ''; }
   const old = ymd(addDays(new Date(), -60));
@@ -304,18 +309,26 @@ function isFreeDay(date) {
 }
 function lessonsOn(date, withCancelled = false) {
   const wd = parseYmd(date).getDay(), wt = weekType(date), ov = S.ttOverrides[date] || {};
-  return S.timetable
-    .filter(l => +l.wd === wd && l.start && l.end && (!wt || !l.week || l.week === 'all' || l.week === wt))
+  const ud = S.untis?.days?.[date];
+  // Echte Stunden aus WebUntis (nächste 2 Wochen) haben Vorrang vor dem Wochenmuster
+  const base = ud && typeof untisKeep === 'function'
+    ? ud.filter(untisKeep).map(l => ({
+      id: 'ud' + l.id, wd, start: l.start, end: l.end, room: l.room, teacher: l.teacher, week: 'all', untis: true,
+      subject: untisName(l.subject), origSubject: untisName(l.orig || l.subject), cancelled: l.status === 'cancelled',
+      substituted: l.status === 'changed' && !!l.orig, changed: l.status === 'changed', extra: l.status === 'extra', exam: l.status === 'exam' || !!l.exam, note: l.info || '',
+    }))
+    : S.timetable.filter(l => +l.wd === wd && l.start && l.end && (!wt || !l.week || l.week === 'all' || l.week === wt));
+  return base
     .map(l => {
       const o = ov[l.id];
       if (!o) return l;
-      return { ...l, cancelled: !!o.cancel, substituted: !!o.subject, origSubject: l.subject, subject: o.subject || l.subject, room: o.room || l.room, note: o.note || '' };
+      return { ...l, cancelled: l.cancelled || !!o.cancel, substituted: l.substituted || !!o.subject, origSubject: l.origSubject || l.subject, subject: o.subject || l.subject, room: o.room || l.room, note: o.note || l.note || '' };
     })
     .filter(l => withCancelled || !l.cancelled)
     .sort((a, b) => toMin(a.start) - toMin(b.start));
 }
 function schoolBlocks(date) {
-  if (!S.timetable.length || isFreeDay(date)) return [];
+  if ((!S.timetable.length && !S.untis?.days?.[date]) || isFreeDay(date)) return [];
   const blocks = [];
   for (const l of lessonsOn(date)) {
     const s = toMin(l.start), e = toMin(l.end), last = blocks.at(-1);

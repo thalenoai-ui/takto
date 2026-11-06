@@ -476,6 +476,12 @@ function localAssistant(text) {
     const tab = /kalender|termin|woche|monat/.test(low) ? 'calendar' : /erinnerung|aufgaben|liste/.test(low) ? 'reminders' : 'plan';
     return { reply: 'Bitte schön 👀', actions: [{ type: 'navigate', tab, date: dt0?.date || (tab === 'plan' ? base : todayStr()), view: /woche/.test(low) ? 'week' : /monat/.test(low) ? 'month' : undefined }], follow_up: false };
   }
+  // WebUntis: "Stundenplan aktualisieren", "hol meinen Stundenplan aus Untis"
+  if (/\buntis\b|stundenplan (aktualisier|neu laden|holen|abgleichen|synchron)/.test(low)) {
+    if (!S.untis?.secret) { setTimeout(() => openUntisConnect(), 400); return { reply: '📲 Ich öffne dir die WebUntis-Verbindung – such deine Schule und melde dich einmal an.', follow_up: false }; }
+    untisSync().then(ok => { if (ok) { applyUntisToTimetable(); save(); render.keepScroll = true; render(); } });
+    return { reply: '📲 Ich hole gerade deinen aktuellen Stundenplan aus WebUntis – Entfall und Vertretungen kommen automatisch mit.', actions: [{ type: 'navigate', tab: 'calendar', date: todayStr() }], follow_up: false };
+  }
   // Stundenplan-Änderungen: "Mathe entfällt morgen", "morgen schulfrei", "Vertretung in Englisch: Deutsch"
   if (/(schulfrei|keine schule|kein unterricht)/.test(low)) {
     const d = dt0?.date || base;

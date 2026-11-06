@@ -220,7 +220,7 @@ svg { display: block; }
 .cell .val { color: var(--text2); }
 .cell .chev { color: var(--text3); font-size: 20px; }
 .cell-sub { font-size: 12.5px; color: var(--text2); margin-top: 1px; }
-.cell input[type=text], .cell input[type=password], .cell input[type=number], .cell input[type=date], .cell input[type=time], .cell select, .cell textarea { border: 0; background: none; outline: none; width: 100%; padding: 0; min-width: 0; }
+.cell input[type=text], .cell input[type=search], .cell input:not([type]), .cell input[type=password], .cell input[type=number], .cell input[type=date], .cell input[type=time], .cell select, .cell textarea { border: 0; background: none; outline: none; width: 100%; padding: 0; min-width: 0; }
 .cell input.right, .cell select.right { text-align: right; width: auto; color: var(--text2); max-width: 60%; }
 .cell input.right[type=date], .cell input.right[type=time] { background: var(--fill); border-radius: 8px; padding: 5px 8px; color: var(--text); }
 .cell input.t-only { margin-left: 6px; }
@@ -333,6 +333,38 @@ svg { display: block; }
 .ld-lbl { font-size: 13px; color: var(--text2); }
 .is-cancelled b { text-decoration: line-through; color: var(--text2); }
 
+/* ---------- Import-Karten (WebUntis, Google) ---------- */
+.import-card { display: flex; flex-direction: column; gap: 10px; }
+.ic-top { display: flex; gap: 12px; align-items: flex-start; }
+.ic-ico { width: 40px; height: 40px; border-radius: 12px; background: var(--grad); display: grid; place-items: center; font-size: 21px; flex-shrink: 0; }
+.import-card textarea { border: 0; outline: none; resize: none; width: 100%; background: var(--fill); border-radius: 12px; padding: 10px 12px; font-size: 15px; min-height: 0; }
+.import-card .btn { flex: 1 1 auto; }
+.import-card > .btn { width: 100%; }
+.file-btn { cursor: pointer; }
+.err-t { color: var(--red); font-size: 14px; margin: 0; }
+.banner.err { background: rgba(255, 59, 48, .12); }
+.tt-manual { margin: 0 0 10px; }
+.tt-manual > summary { list-style: none; cursor: pointer; margin: 4px 16px 14px; padding: 12px 14px; border-radius: 14px; background: var(--bg2); color: var(--accent); font-weight: 700; box-shadow: var(--card-shadow); }
+.tt-manual > summary::-webkit-details-marker { display: none; }
+.tt-manual[open] > summary { margin-bottom: 6px; }
+.ux-hero { font-size: 54px; text-align: center; margin-top: 8px; }
+.ux-h { text-align: center; font-size: 24px; font-weight: 800; margin: 6px 20px 8px; letter-spacing: -.3px; }
+.ux-ok { margin: 4px 16px 16px; padding: 12px 14px; border-radius: 14px; background: rgba(52, 199, 89, .14); font-size: 15px; }
+.ux-sso > summary { list-style: none; cursor: pointer; }
+.ux-sso > summary::-webkit-details-marker { display: none; }
+.ux-sso .help { margin: 8px 0 4px; }
+.ux-week { display: flex; flex-direction: column; gap: 8px; }
+.ux-day { display: flex; gap: 10px; align-items: baseline; }
+.ux-day b { width: 26px; flex-shrink: 0; color: var(--text2); font-size: 13px; }
+.ux-day span { display: flex; flex-wrap: wrap; gap: 4px; }
+.ux-day i { font-style: normal; font-size: 12.5px; font-weight: 600; padding: 3px 8px; border-radius: 8px; background: color-mix(in srgb, var(--sc) 18%, transparent); color: var(--text); }
+.chips-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.pick { padding: 8px 12px; border-radius: 14px; background: var(--fill); color: var(--text2); font-weight: 600; font-size: 14px; text-decoration: line-through; }
+.pick.on { background: var(--accent); color: #fff; text-decoration: none; }
+.step { width: 24px; height: 24px; border-radius: 50%; background: var(--accent); color: #fff; display: grid; place-items: center; font-size: 13px; font-weight: 800; flex-shrink: 0; }
+a.cell { text-decoration: none; }
+.ob-actions { display: flex; flex-direction: column; gap: 10px; margin: 0 20px 6px; }
+
 /* ---------- Rückblick ---------- */
 .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 0 16px 20px; }
 .stat { background: var(--bg2); border-radius: 16px; padding: 12px 8px; text-align: center; box-shadow: var(--card-shadow); }
@@ -357,6 +389,7 @@ svg { display: block; }
 #ob h2 { font-size: 28px; font-weight: 800; letter-spacing: -.5px; margin: 10px 20px 8px; text-align: center; }
 #ob > p { color: var(--text2); margin: 0 26px 20px; text-align: center; line-height: 1.5; }
 .ob-hero { font-size: 64px; text-align: center; animation: up-in .5s; }
+.ob-logo img { width: 96px; height: 96px; border-radius: 22px; box-shadow: 0 12px 30px rgba(110, 91, 255, .35); }
 .ob-dots { display: flex; justify-content: center; gap: 6px; margin: auto 0 16px; padding-top: 20px; }
 .ob-dots i { width: 7px; height: 7px; border-radius: 4px; background: var(--fill); transition: .2s; }
 .ob-dots i.on { width: 22px; background: var(--accent); }

@@ -110,6 +110,18 @@ async function chat({ history, userText, settings }) {
   return { json, history: [...sent, { role: 'assistant', content: res.content }] };
 }
 
-window.TagwerkAI = { chat };
+// Kurze Einzelfrage ohne Verlauf (z. B. Import-Hinweise in Regeln umwandeln) – Antwort als JSON
+async function oneShot({ system, user, settings }) {
+  if (!sdk) sdk = (await import(SDK_URL)).default;
+  const client = new sdk({ apiKey: settings.apiKey, dangerouslyAllowBrowser: true, maxRetries: 1 });
+  const base = { model: settings.model || 'claude-opus-5-5', max_tokens: 8000, system, messages: [{ role: 'user', content: user }], output_config: { effort: 'low' } };
+  let res;
+  try { res = await client.beta.messages.create({ ...base, betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' }); }
+  catch (e) { if (!(e instanceof sdk.BadRequestError || e?.status === 400)) throw e; res = await client.messages.create(base); }
+  if (res.stop_reason === 'refusal') throw new Error('Anfrage wurde abgelehnt');
+  return parseJSON(res.content.filter(b => b.type === 'text').map(b => b.text).join(''));
+}
+
+window.TagwerkAI = { chat, oneShot };
 window.Tagwerk?.render?.();
 window.Tagwerk?.paintAs?.();

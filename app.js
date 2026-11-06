@@ -193,7 +193,7 @@ setInterval(() => {
   if (document.querySelector('.sheet') || ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName) || swp) return;
   if (ui.tab === 'plan' || ui.tab === 'calendar') { render.keepScroll = true; render(); }
 }, 60000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) { refreshWeather(); render.keepScroll = true; render(); } });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { refreshWeather(); untisAutoSync(); render.keepScroll = true; render(); } });
 window.addEventListener('resize', () => layoutAs());
 
 // ---------- Start ----------
@@ -203,6 +203,7 @@ render();
 if (!S.settings.onboarded) setTimeout(openOnboarding, 350);
 else setTimeout(showAiHint, 1500);
 refreshWeather();
+untisAutoSync();
 if (S.focus) updateFocusPill();
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => { });
 window.Tagwerk = { S: () => S, render, paintAs, importICS, computePlan, applyAction, localAssistant, asSend, save, showTarget };
